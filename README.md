@@ -1,0 +1,2 @@
+# chess-helper
+Android Only
