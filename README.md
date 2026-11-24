@@ -15,7 +15,8 @@ The gear in the title bar hides/shows all feature buttons (long-press: choose wh
 Pondering: while you wait, the engine predicts the opponent's likely replies (shown as "Likely reply") and prepares its
 answers, so the next hint can be instant.
 
-Engine: iterative deepening with transposition table, null-move and late-move reductions, killer/history ordering,
+Engine: the real Stockfish 18 (built from the official source in the GitHub workflow, shipped as libstockfish.so,
+run through UCI). Fallback when it cannot start: a built-in Java engine, iterative deepening with transposition table, null-move and late-move reductions, killer/history ordering,
 repetition awareness and an evaluation with pawn structure, king shelter, mobility and endgame mop-up.
 
 Build: upload the zip to a GitHub repo; the Actions workflow builds `ChessHelper.apk` and publishes it under Releases.

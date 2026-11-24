@@ -36,6 +36,32 @@ jobs:
           echo "Found gradlew at: $G"
           echo "dir=$(dirname "$G")" >> "$GITHUB_OUTPUT"
 
+      - name: Build Stockfish (the real engine) for Android
+        shell: bash
+        run: |
+          set -e
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)}}"
+          echo "Using NDK: $NDK"
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          git clone --depth 1 --branch sf_18 https://github.com/official-stockfish/Stockfish.git
+          cd Stockfish/src
+          ok=0
+          for i in 1 2 3 4; do
+            rm -f *.nnue
+            make net || true
+            if ls *.nnue > /dev/null 2>&1 && [ -z "$(find . -maxdepth 1 -name '*.nnue' -size -1000k)" ]; then ok=1; break; fi
+            echo "Network files not complete, retrying ($i)"; sleep 15
+          done
+          [ "$ok" = 1 ] || { echo "::error::could not download the Stockfish network files"; exit 1; }
+          ls -la *.nnue
+          make -j4 build ARCH=armv8 COMP=ndk
+          file stockfish
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d stockfish | grep -E "NEEDED|Shared" || true
+          DEST="${{ steps.proj.outputs.dir }}/app/src/main/jniLibs/arm64-v8a"
+          mkdir -p "$DEST"
+          cp stockfish "$DEST/libstockfish.so"
+          ls -la "$DEST"
+
       - name: Accept Android SDK licences
         shell: bash
         run: |
