@@ -57,8 +57,9 @@ jobs:
           make -j4 build ARCH=armv8 COMP=ndk
           file stockfish
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d stockfish | grep -E "NEEDED|Shared" || true
-          DEST="${{ steps.proj.outputs.dir }}/app/src/main/jniLibs/arm64-v8a"
+          DEST="$GITHUB_WORKSPACE/${{ steps.proj.outputs.dir }}/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "$DEST"
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" stockfish
           cp stockfish "$DEST/libstockfish.so"
           ls -la "$DEST"
 
@@ -75,6 +76,9 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
           cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/ChessHelper.apk"
+          ls -la "$GITHUB_WORKSPACE/ChessHelper.apk"
+          unzip -l "$GITHUB_WORKSPACE/ChessHelper.apk" | grep -E "libstockfish|lib/" || true
+          unzip -l "$GITHUB_WORKSPACE/ChessHelper.apk" | grep -q "lib/arm64-v8a/libstockfish.so" || { echo "::error::Stockfish is missing from the APK"; exit 1; }
 
       - name: Publish APK to Releases (easy download on your phone)
         uses: softprops/action-gh-release@v2
