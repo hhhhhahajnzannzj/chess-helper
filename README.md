@@ -12,6 +12,9 @@ opponent's moves), Fast Checkmate 100% (complete mate search; shown mates are al
 missed within the time limit), Worst move (red box + arrow), Mid move (yellow box + arrow), My pieces, Board size.
 The gear in the title bar hides/shows all feature buttons (long-press: choose which); the X asks "Are you sure to close?".
 
+Pondering: while you wait, the engine predicts the opponent's likely replies (shown as "Likely reply") and prepares its
+answers, so the next hint can be instant.
+
 Engine: iterative deepening with transposition table, null-move and late-move reductions, killer/history ordering,
 repetition awareness and an evaluation with pawn structure, king shelter, mobility and endgame mop-up.
 
