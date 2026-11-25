@@ -184,8 +184,8 @@ jobs:
           make -C tools arch=android CXX=g++ CXXFLAGS_EXTRA="-march=x86-64 -mtune=generic -U__AVX2__ -U__AVX512F__ -U__AVX512BW__"
           ./tools/process_net false "$NET.bin" ./processed.bin
           ls -la processed.bin
-          # the engine itself, built with the Android compiler (API 26)
-          make -j4 _nopgo SKIP_PROCESS_NET=true arch=android EXE=plentychess_bin CXX="$BIN/aarch64-linux-android26-clang++" CC="$BIN/aarch64-linux-android26-clang"
+          # the engine itself, built with the Android compiler (API 29: it needs aligned_alloc; the program is linked statically)
+          make -j4 _nopgo SKIP_PROCESS_NET=true arch=android EXE=plentychess_bin CXX="$BIN/aarch64-linux-android29-clang++" CC="$BIN/aarch64-linux-android29-clang"
           file plentychess_bin
           "$BIN/llvm-strip" plentychess_bin
           ls -la plentychess_bin
