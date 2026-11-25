@@ -36,13 +36,15 @@ jobs:
           echo "Found gradlew at: $G"
           echo "dir=$(dirname "$G")" >> "$GITHUB_OUTPUT"
 
-      - name: Build Stockfish (the real engine) for Android
+      - name: Build Stockfish (the real engine) for Android - 64-bit and 32-bit phones
         shell: bash
         run: |
           set -e
           NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)}}"
           echo "Using NDK: $NDK"
-          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$BIN:$PATH"
+          PROJ="$GITHUB_WORKSPACE/${{ steps.proj.outputs.dir }}"
           git clone --depth 1 --branch sf_19 https://github.com/official-stockfish/Stockfish.git
           cd Stockfish/src
           ok=0
@@ -54,20 +56,82 @@ jobs:
           done
           [ "$ok" = 1 ] || { echo "::error::could not download the Stockfish network files"; exit 1; }
           ls -la *.nnue
-          # two builds: a fast one for phones with the ARM dot-product instructions, and a safe one for the rest
-          make -j4 build ARCH=armv8-dotprod COMP=ndk
-          file stockfish
-          cp stockfish stockfish_dp
-          make clean
-          make -j4 build ARCH=armv8 COMP=ndk
-          file stockfish
-          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d stockfish | grep -E "NEEDED|Shared" || true
-          DEST="$GITHUB_WORKSPACE/${{ steps.proj.outputs.dir }}/app/src/main/jniLibs/arm64-v8a"
-          mkdir -p "$DEST"
-          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" stockfish stockfish_dp
-          cp stockfish "$DEST/libstockfish.so"
-          cp stockfish_dp "$DEST/libstockfish_dp.so"
-          ls -la "$DEST"
+          # build_sf <ARCH> <compiler prefix> <file name in the app> <app ABI folder>
+          # Built for Android 8 (API 26) like the app; if that fails the engine's own default (API 29) is used.
+          build_sf() {
+            make clean
+            if ! make -j4 build ARCH="$1" COMP=ndk CXX="$2"26-clang++; then
+              echo "::warning::API 26 build of $1 failed, using the default API"
+              make clean
+              make -j4 build ARCH="$1" COMP=ndk
+            fi
+            file stockfish
+            "$BIN/llvm-readelf" -d stockfish | grep -E "NEEDED|Shared" || true
+            "$BIN/llvm-strip" stockfish
+            mkdir -p "$PROJ/app/src/main/jniLibs/$4"
+            cp stockfish "$PROJ/app/src/main/jniLibs/$4/$3"
+          }
+          # 64-bit phones: a fast build for phones with the ARM dot-product instructions, and a safe one for the rest
+          build_sf armv8-dotprod aarch64-linux-android libstockfish_dp.so arm64-v8a
+          build_sf armv8 aarch64-linux-android libstockfish.so arm64-v8a
+          # 32-bit phones (and 64-bit phones running 32-bit Android)
+          build_sf armv7-neon armv7a-linux-androideabi libstockfish.so armeabi-v7a
+          ls -la "$PROJ"/app/src/main/jniLibs/*
+
+      - name: Second engine for the Engine Agent (Reckless, optional - the APK is built without it if this fails)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)}}"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          PROJ="$GITHUB_WORKSPACE/${{ steps.proj.outputs.dir }}"
+          git clone --depth 1 https://github.com/codedeliveryservice/Reckless.git
+          cd Reckless
+          git log -1 --format='Reckless commit %h %cd'
+          # 1. a normal build for this computer, only to check that it speaks UCI the way the app expects
+          RUSTFLAGS="-C target-cpu=native" CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+            cargo build --release --no-default-features --bin reckless
+          ls -la networks/ target/release/reckless
+          (printf 'uci\nsetoption name Threads value 1\nsetoption name Hash value 16\nsetoption name MultiPV value 3\nisready\nposition startpos\ngo movetime 1500\n'; sleep 3; \
+           printf 'position fen r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3\ngo movetime 400 searchmoves f1b5\n'; sleep 1.5; printf 'quit\n') \
+            | ./target/release/reckless > ../reckless_uci.txt || true
+          grep -E "^id name|^uciok|^readyok" ../reckless_uci.txt || true
+          echo "info lines with multipv: $(grep -c 'multipv' ../reckless_uci.txt)"
+          grep -E "^bestmove" ../reckless_uci.txt
+          grep -q "multipv 3" ../reckless_uci.txt || { echo "::error::Reckless did not report 3 lines"; exit 1; }
+          # 2. the build for 64-bit phones with the dot-product instructions
+          rustup target add aarch64-linux-android
+          export CC_aarch64_linux_android="$BIN/aarch64-linux-android26-clang"
+          export AR_aarch64_linux_android="$BIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$BIN/aarch64-linux-android26-clang"
+          RUSTFLAGS="-C target-feature=+dotprod" cargo build --release --no-default-features --bin reckless --target aarch64-linux-android
+          OUT=target/aarch64-linux-android/release/reckless
+          "$BIN/llvm-strip" "$OUT"
+          file "$OUT"
+          ls -la "$OUT"
+          SIZE=$(stat -c%s "$OUT")
+          if [ "$SIZE" -gt 140000000 ]; then echo "::warning::Reckless is $SIZE bytes - too big for the APK, leaving it out"; exit 0; fi
+          mkdir -p "$PROJ/app/src/main/jniLibs/arm64-v8a"
+          cp "$OUT" "$PROJ/app/src/main/jniLibs/arm64-v8a/libengdp_reckless.so"
+          ls -la "$PROJ/app/src/main/jniLibs/arm64-v8a"
+
+      - name: Add the engines you put in the engines folder (optional)
+        shell: bash
+        run: |
+          PROJ="$GITHUB_WORKSPACE/${{ steps.proj.outputs.dir }}"
+          for pair in arm64:arm64-v8a arm32:armeabi-v7a; do
+            src="engines/${pair%%:*}"; dst="${pair##*:}"
+            [ -d "$src" ] || continue
+            for f in "$src"/*; do
+              [ -f "$f" ] || continue
+              case "$f" in *.md|*.txt) continue;; esac
+              n=$(basename "$f" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]/_/g')
+              mkdir -p "$PROJ/app/src/main/jniLibs/$dst"
+              cp "$f" "$PROJ/app/src/main/jniLibs/$dst/libeng_$n.so"
+              echo "Added engine $f for $dst as libeng_$n.so"
+            done
+          done
 
       - name: Accept Android SDK licences
         shell: bash
@@ -75,22 +139,39 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
-      - name: Build the APK
+      - name: Build the APKs (one for 64-bit phones, one for 32-bit phones)
         working-directory: ${{ steps.proj.outputs.dir }}
         shell: bash
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/ChessHelper.apk"
-          ls -la "$GITHUB_WORKSPACE/ChessHelper.apk"
-          unzip -l "$GITHUB_WORKSPACE/ChessHelper.apk" | grep -E "libstockfish|lib/" || true
-          unzip -l "$GITHUB_WORKSPACE/ChessHelper.apk" | grep -q "lib/arm64-v8a/libstockfish_dp.so" || { echo "::error::fast Stockfish is missing from the APK"; exit 1; }
-          unzip -l "$GITHUB_WORKSPACE/ChessHelper.apk" | grep -q "lib/arm64-v8a/libstockfish.so" || { echo "::error::Stockfish is missing from the APK"; exit 1; }
+          ./gradlew assembleDebug --no-daemon --stacktrace -PabiTarget=arm64-v8a
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/ChessHelper-arm64.apk"
+          ./gradlew assembleDebug --no-daemon --stacktrace -PabiTarget=armeabi-v7a
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/ChessHelper-arm32.apk"
+          ls -la "$GITHUB_WORKSPACE"/ChessHelper-*.apk
+          echo "---- 64-bit APK"; unzip -l "$GITHUB_WORKSPACE/ChessHelper-arm64.apk" | grep -E "lib/" || true
+          echo "---- 32-bit APK"; unzip -l "$GITHUB_WORKSPACE/ChessHelper-arm32.apk" | grep -E "lib/" || true
+          A64="$GITHUB_WORKSPACE/ChessHelper-arm64.apk"; A32="$GITHUB_WORKSPACE/ChessHelper-arm32.apk"
+          unzip -l "$A64" | grep -q "lib/arm64-v8a/libstockfish_dp.so" || { echo "::error::fast Stockfish is missing from the 64-bit APK"; exit 1; }
+          unzip -l "$A64" | grep -q "lib/arm64-v8a/libstockfish.so" || { echo "::error::Stockfish is missing from the 64-bit APK"; exit 1; }
+          unzip -l "$A64" | grep -q "lib/armeabi-v7a/" && { echo "::error::32-bit files are inside the 64-bit APK"; exit 1; }
+          unzip -l "$A32" | grep -q "lib/armeabi-v7a/libstockfish.so" || { echo "::error::Stockfish is missing from the 32-bit APK"; exit 1; }
+          unzip -l "$A32" | grep -q "lib/arm64-v8a/" && { echo "::error::64-bit files are inside the 32-bit APK"; exit 1; }
+          if unzip -l "$A64" | grep -q "libengdp_reckless.so"; then echo "Engine Agent (Reckless) is in the 64-bit APK"; else echo "Engine Agent: no second engine in this build"; fi
+          true
 
-      - name: Publish APK to Releases (easy download on your phone)
+      - name: Publish the APKs to Releases (easy download on your phone)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_number }}
           name: Chess Helper APK ${{ github.run_number }}
-          files: ChessHelper.apk
-          
+          body: |
+            Two files, pick the one for your phone:
+            - **ChessHelper-arm64.apk** - phones with a 64-bit processor (almost every phone made since 2017). Choose this one if unsure.
+            - **ChessHelper-arm32.apk** - older or low-end phones, or phones running 32-bit Android.
+
+            If Android says the app cannot be installed because of the processor type, take the other file.
+            If it says the app conflicts with an existing one, uninstall the old Chess Helper first.
+          files: |
+            ChessHelper-arm64.apk
+            ChessHelper-arm32.apk
