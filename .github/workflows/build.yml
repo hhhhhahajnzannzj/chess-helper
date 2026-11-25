@@ -171,17 +171,25 @@ jobs:
           set -e
           NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)}}"
           BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export PATH="$BIN:$PATH"
           OUT="$GITHUB_WORKSPACE/extra-engines-out"; mkdir -p "$OUT"
           git clone --depth 1 https://github.com/Yoshie2000/PlentyChess.git
           cd PlentyChess
           git log -1 --format='PlentyChess commit %h %cd %s'
-          cat network.txt
-          make -j4 arch=android EXE=plentychess_bin
+          NET="$(cat network.txt)"
+          curl -fsSL --retry 3 -o "$NET.bin" "https://github.com/Yoshie2000/PlentyNetworks/releases/download/$NET/$NET.bin"
+          ls -la "$NET.bin"
+          # The network converter runs on this computer. Build it as a plain program (no x86 vector extensions),
+          # in the layout the ARM build expects (-DARCH_ARM).
+          make -C tools clean
+          make -C tools arch=android CXX=g++ CXXFLAGS_EXTRA="-march=x86-64 -mtune=generic -U__AVX2__ -U__AVX512F__ -U__AVX512BW__"
+          ./tools/process_net false "$NET.bin" ./processed.bin
+          ls -la processed.bin
+          # the engine itself, built with the Android compiler (API 26)
+          make -j4 _nopgo SKIP_PROCESS_NET=true arch=android EXE=plentychess_bin CXX="$BIN/aarch64-linux-android26-clang++" CC="$BIN/aarch64-linux-android26-clang"
           file plentychess_bin
           "$BIN/llvm-strip" plentychess_bin
           ls -la plentychess_bin
-          cp plentychess_bin "$OUT/libengdp_plentychess.so"
+          cp plentychess_bin "$OUT/libeng_plentychess.so"
 
       - name: Add the engines you put in the engines folder (optional)
         shell: bash
@@ -199,6 +207,46 @@ jobs:
               echo "Added engine $f for $dst as libeng_$n.so"
             done
           done
+
+      - name: Stockfish for Windows PCs (optional - the PC app still works with its built-in engine if this fails)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-mingw-w64-x86-64-posix
+          which x86_64-w64-mingw32-c++-posix
+          mkdir -p "$GITHUB_WORKSPACE/desk-pack/engines"
+          cd Stockfish/src
+          for pair in x86-64-avx2:stockfish-avx2.exe x86-64-sse41-popcnt:stockfish-sse41.exe; do
+            arch="${pair%%:*}"; name="${pair##*:}"
+            make clean
+            make -j4 build ARCH="$arch" COMP=mingw
+            file stockfish.exe
+            x86_64-w64-mingw32-strip stockfish.exe
+            ls -la stockfish.exe
+            cp stockfish.exe "$GITHUB_WORKSPACE/desk-pack/engines/$name"
+          done
+          ls -la "$GITHUB_WORKSPACE/desk-pack/engines"
+
+      - name: Collect the PC app sources
+        shell: bash
+        run: |
+          set -e
+          PROJ="$GITHUB_WORKSPACE/${{ steps.proj.outputs.dir }}"
+          mkdir -p desk-pack/src desk-pack/engines
+          cp -r "$PROJ/app/src/main/java/com/chesshelper/overlay/core" desk-pack/src/core
+          cp -r "$PROJ/desktop/src/com" desk-pack/src/
+          mkdir -p desk-pack/src/com/chesshelper/overlay
+          mv desk-pack/src/core desk-pack/src/com/chesshelper/overlay/core
+          find desk-pack/src -name '*.java' | head -30
+          ls -la desk-pack/engines
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-pack
+          path: desk-pack
+          retention-days: 3
 
       - name: Accept Android SDK licences
         shell: bash
@@ -248,9 +296,66 @@ jobs:
             - **ChessHelper-arm32.apk** - older or low-end phones, or phones running 32-bit Android.
             - **ChessHelper-arm64-allengines.apk** - optional, 64-bit phones only, very large: also has Triumviratus, PlentyChess and ShashChess for the Engine Agent (only the ones that could be built; needs a lot of free space and memory).
 
+            For Windows PCs (64-bit):
+            - **ChessHelper-Windows-portable.zip** - unzip it and run ChessHelper.exe (nothing to install, Java is inside).
+            - **ChessHelper-Setup.exe** - the same app as a normal installer (only there when the installer could be built).
+
+            There is no iPhone/iPad version: iOS does not allow a floating helper window or running a chess engine like this.
+
             If Android says the app cannot be installed because of the processor type, take the other file.
             If it says the app conflicts with an existing one, uninstall the old Chess Helper first.
           files: |
             ChessHelper-arm64.apk
             ChessHelper-arm32.apk
             ChessHelper-arm64-allengines.apk
+
+  windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-pack
+          path: pack
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build the Windows app (.exe)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p classes input
+          javac -encoding UTF-8 -d classes $(find pack/src -name '*.java')
+          printf 'Main-Class: com.chesshelper.desktop.DesktopApp\n' > manifest.txt
+          jar cfm input/chesshelper.jar manifest.txt -C classes .
+          mkdir -p input/engines
+          cp pack/engines/* input/engines/ 2>/dev/null || echo "no Windows Stockfish: the app will use its built-in engine"
+          ls -la input input/engines
+          # a portable folder with its own Java inside: unzip it and run ChessHelper.exe
+          jpackage --type app-image --name ChessHelper --input input --main-jar chesshelper.jar \
+            --main-class com.chesshelper.desktop.DesktopApp --dest out --java-options "-Xmx768m"
+          ls -la out/ChessHelper out/ChessHelper/app
+          powershell -NoProfile -Command "Compress-Archive -Path out/ChessHelper -DestinationPath ChessHelper-Windows-portable.zip"
+          ls -la ChessHelper-Windows-portable.zip
+
+      - name: Build the Windows installer (optional)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+          jpackage --type exe --name ChessHelper-Setup --app-version 1.0 --input input --main-jar chesshelper.jar \
+            --main-class com.chesshelper.desktop.DesktopApp --dest installer --java-options "-Xmx768m" \
+            --win-menu --win-shortcut --win-dir-chooser
+          ls -la installer
+          mv installer/*.exe ChessHelper-Setup.exe
+
+      - name: Add the Windows files to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          files: |
+            ChessHelper-Windows-portable.zip
+            ChessHelper-Setup.exe
