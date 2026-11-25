@@ -116,6 +116,73 @@ jobs:
           cp "$OUT" "$PROJ/app/src/main/jniLibs/arm64-v8a/libengdp_reckless.so"
           ls -la "$PROJ/app/src/main/jniLibs/arm64-v8a"
 
+      - name: Extra engine ShashChess (optional - only goes into the allengines APK)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)}}"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$BIN:$PATH"
+          OUT="$GITHUB_WORKSPACE/extra-engines-out"; mkdir -p "$OUT"
+          git clone --depth 1 https://github.com/amchess/ShashChess.git
+          cd ShashChess/src
+          git log -1 --format='ShashChess commit %h %cd %s'
+          grep -n "EvalFileDefaultName" evaluate.h | head -3
+          cp "$GITHUB_WORKSPACE"/Stockfish/src/*.nnue . 2>/dev/null || true
+          make net || true
+          ls -la *.nnue
+          make clean || true
+          make -j4 build ARCH=armv8-dotprod COMP=ndk CXX=aarch64-linux-android26-clang++ EXE=shashchess_bin
+          file shashchess_bin
+          "$BIN/llvm-strip" shashchess_bin
+          ls -la shashchess_bin
+          cp shashchess_bin "$OUT/libengdp_shashchess.so"
+
+      - name: Extra engine Triumviratus (optional - only goes into the allengines APK)
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)}}"
+          OUT="$GITHUB_WORKSPACE/extra-engines-out"; mkdir -p "$OUT"
+          git clone --depth 1 https://github.com/Tors3/Triumviratus.git
+          cd Triumviratus/source
+          git log -1 --format='Triumviratus commit %h %cd %s'
+          URL=$(curl -sL -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/Tors3/Triumviratus-Networks/releases/tags/consilium-plebis \
+                | python3 -c "import sys,json; d=json.load(sys.stdin); print([a['browser_download_url'] for a in d['assets'] if a['name'].endswith('.nnue')][0])")
+          echo "network: $URL"
+          curl -fL --retry 3 -o nn-consilium-plebis.nnue "$URL"
+          ls -la nn-consilium-plebis.nnue
+          [ "$(stat -c%s nn-consilium-plebis.nnue)" -gt 1000000 ]
+          make clean || true
+          make android-dotprod NDK="$NDK" -j4
+          file triumviratus_android
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" triumviratus_android
+          ls -la triumviratus_android
+          cp triumviratus_android "$OUT/libengdp_triumviratus.so"
+
+      - name: Extra engine PlentyChess (optional - only goes into the allengines APK)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)}}"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$BIN:$PATH"
+          OUT="$GITHUB_WORKSPACE/extra-engines-out"; mkdir -p "$OUT"
+          git clone --depth 1 https://github.com/Yoshie2000/PlentyChess.git
+          cd PlentyChess
+          git log -1 --format='PlentyChess commit %h %cd %s'
+          cat network.txt
+          make -j4 arch=android EXE=plentychess_bin
+          file plentychess_bin
+          "$BIN/llvm-strip" plentychess_bin
+          ls -la plentychess_bin
+          cp plentychess_bin "$OUT/libengdp_plentychess.so"
+
       - name: Add the engines you put in the engines folder (optional)
         shell: bash
         run: |
@@ -158,6 +225,16 @@ jobs:
           unzip -l "$A32" | grep -q "lib/armeabi-v7a/libstockfish.so" || { echo "::error::Stockfish is missing from the 32-bit APK"; exit 1; }
           unzip -l "$A32" | grep -q "lib/arm64-v8a/" && { echo "::error::64-bit files are inside the 32-bit APK"; exit 1; }
           if unzip -l "$A64" | grep -q "libengdp_reckless.so"; then echo "Engine Agent (Reckless) is in the 64-bit APK"; else echo "Engine Agent: no second engine in this build"; fi
+          # the 64-bit APK with every second engine that could be built
+          echo "---- extra engines built:"; ls -la "$GITHUB_WORKSPACE"/extra-engines-out 2>/dev/null || echo "none"
+          if ls "$GITHUB_WORKSPACE"/extra-engines-out/* > /dev/null 2>&1; then
+            mkdir -p app/src/main/jniLibs/arm64-v8a
+            cp "$GITHUB_WORKSPACE"/extra-engines-out/* app/src/main/jniLibs/arm64-v8a/
+            ./gradlew assembleDebug --no-daemon --stacktrace -PabiTarget=arm64-v8a
+            cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/ChessHelper-arm64-allengines.apk"
+            ls -la "$GITHUB_WORKSPACE"/ChessHelper-arm64-allengines.apk
+            echo "---- allengines APK"; unzip -l "$GITHUB_WORKSPACE/ChessHelper-arm64-allengines.apk" | grep -E "lib/" || true
+          fi
           true
 
       - name: Publish the APKs to Releases (easy download on your phone)
@@ -169,9 +246,11 @@ jobs:
             Two files, pick the one for your phone:
             - **ChessHelper-arm64.apk** - phones with a 64-bit processor (almost every phone made since 2017). Choose this one if unsure.
             - **ChessHelper-arm32.apk** - older or low-end phones, or phones running 32-bit Android.
+            - **ChessHelper-arm64-allengines.apk** - optional, 64-bit phones only, very large: also has Triumviratus, PlentyChess and ShashChess for the Engine Agent (only the ones that could be built; needs a lot of free space and memory).
 
             If Android says the app cannot be installed because of the processor type, take the other file.
             If it says the app conflicts with an existing one, uninstall the old Chess Helper first.
           files: |
             ChessHelper-arm64.apk
             ChessHelper-arm32.apk
+            ChessHelper-arm64-allengines.apk
