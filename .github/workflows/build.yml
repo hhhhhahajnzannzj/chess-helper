@@ -46,6 +46,7 @@ jobs:
           export PATH="$BIN:$PATH"
           PROJ="$GITHUB_WORKSPACE/${{ steps.proj.outputs.dir }}"
           git clone --depth 1 --branch sf_19 https://github.com/official-stockfish/Stockfish.git
+          echo "Stockfish source: official-stockfish/Stockfish tag sf_19, commit $(git -C Stockfish rev-parse HEAD)"
           cd Stockfish/src
           ok=0
           for i in 1 2 3 4; do
@@ -77,6 +78,11 @@ jobs:
           # 32-bit phones (and 64-bit phones running 32-bit Android)
           build_sf armv7-neon armv7a-linux-androideabi libstockfish.so armeabi-v7a
           ls -la "$PROJ"/app/src/main/jniLibs/*
+          # Proof that the engine source is the untouched official one (nothing was patched).
+          if ! git -C "$GITHUB_WORKSPACE/Stockfish" diff --quiet; then
+            echo "::error::the Stockfish source was modified"; git -C "$GITHUB_WORKSPACE/Stockfish" status --short; exit 1
+          fi
+          echo "Stockfish source check: unmodified official sf_19"
 
       - name: Second engine for the Engine Agent (Reckless, optional - the APK is built without it if this fails)
         continue-on-error: true
