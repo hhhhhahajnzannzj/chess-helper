@@ -1,0 +1,109 @@
+name: Build Chess Helper iOS (IPA)
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Find the iOS project (unzips it if you uploaded the .zip)
+        shell: bash
+        run: |
+          set +e
+          for z in ./*.zip; do
+            if [ -f "$z" ]; then echo "Unzipping $z"; unzip -q -o "$z" -d _project; fi
+          done
+          Y=$(find . -name project.yml -path "*/ios/*" -not -path "./.git/*" | head -1)
+          if [ -z "$Y" ]; then echo "::error::ios/project.yml not found"; exit 1; fi
+          echo "IOS_DIR=$(cd "$(dirname "$Y")" && pwd)" >> "$GITHUB_ENV"
+          echo "Found: $Y"
+
+      - name: Show the tools
+        shell: bash
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Stockfish networks (the engine inside the app needs them)
+        shell: bash
+        run: |
+          set -e
+          RES="$IOS_DIR/ChessHelper/Resources"
+          mkdir -p "$RES"
+          for n in nn-1111cefa1111 nn-37f18f62d772; do
+            ok=0
+            for i in 1 2 3 4; do
+              curl -L --fail --retry 3 -o "$RES/$n.nnue" "https://tests.stockfishchess.org/api/nn/$n.nnue" || true
+              sum=$(shasum -a 256 "$RES/$n.nnue" | cut -c1-12)
+              if [ "$sum" = "${n#nn-}" ]; then ok=1; break; fi
+              echo "Network $n not complete (got $sum), retrying ($i)"; sleep 10
+            done
+            [ "$ok" = 1 ] || { echo "::error::could not download $n"; exit 1; }
+          done
+          ls -la "$RES"
+
+      - name: Install XcodeGen and make the Xcode project
+        shell: bash
+        run: |
+          set -e
+          brew install xcodegen
+          cd "$IOS_DIR"
+          xcodegen generate
+          ls
+
+      - name: Build the app (unsigned)
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$IOS_DIR"
+          xcodebuild -project ChessHelper.xcodeproj -scheme ChessHelper -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E "error:|warning: unable|BUILD |Compiling|Linking" | tail -n 60 || true
+          if ! grep -q "BUILD SUCCEEDED" build.log; then
+            echo "::error::xcodebuild failed. Last lines:"
+            tail -n 80 build.log
+            exit 1
+          fi
+
+      - name: Pack the .ipa
+        shell: bash
+        run: |
+          set -e
+          cd "$IOS_DIR"
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "App: $APP"
+          ls -la "$APP" | head -30
+          test -f "$APP/nn-1111cefa1111.nnue" || { echo "::error::the network file is not inside the app"; exit 1; }
+          rm -rf Payload ChessHelper-iOS.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry ChessHelper-iOS.ipa Payload
+          ls -la ChessHelper-iOS.ipa
+          cp ChessHelper-iOS.ipa "$GITHUB_WORKSPACE/ChessHelper-iOS.ipa"
+
+      - name: Keep the build log if something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: ${{ env.IOS_DIR }}/build.log
+
+      - name: Publish the .ipa in Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-${{ github.run_number }}
+          name: Chess Helper iOS (.ipa) #${{ github.run_number }}
+          files: ChessHelper-iOS.ipa
+          body: |
+            Chess Helper for iPhone/iPad (unsigned .ipa, Stockfish 17 inside).
+            It is NOT signed: install it with Sideloadly, AltStore or TrollStore (see ios/README.md in the project).
+            iOS does not allow a floating window over other apps, so this is a normal app with its own board.
