@@ -61,6 +61,20 @@ jobs:
             exit 1
           fi
 
+      - name: Allow background audio (needed for the floating Picture in Picture board)
+        shell: bash
+        run: |
+          set -e
+          cd "$IOS_DIR"
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          PLIST="$APP/Info.plist"
+          if /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$PLIST" >/dev/null 2>&1; then
+            echo "UIBackgroundModes already there"
+          else
+            /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" -c "Add :UIBackgroundModes:0 string audio" "$PLIST"
+          fi
+          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$PLIST"
+
       - name: Pack the .ipa
         shell: bash
         run: |
@@ -92,4 +106,4 @@ jobs:
           body: |
             Chess Helper for iPhone/iPad (unsigned .ipa, real Stockfish 19 engine). The required NNUE network is downloaded and SHA-256 verified on first launch; internet is needed for initial setup.
             It is NOT signed: install it with Sideloadly, AltStore or TrollStore (see ios/README.md in the project).
-            iOS does not allow a floating window over other apps, so this is a normal app with its own board.
+            iOS does not allow a free floating window over other apps. This app has a floating Picture in Picture board instead: it shows the board and the blue move on top of other apps (view only; tap the moves in the app).
