@@ -1,4 +1,4 @@
-# Chess Helper (Android)
+# Chess Helper (Android, PC/Laptop and IOS)
 
 A floating chess board. You tap the moves (yours and the opponent's) on it, and on your turn it shows the best
 move on its own board with a BLUE box on the piece, a BLUE box on the target square and an ARROW.
