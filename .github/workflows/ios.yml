@@ -14,14 +14,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Find the iOS project (unzips it if you uploaded the .zip)
+      - name: Find the iOS project and apply the Stockfish 19 upgrade
         shell: bash
         run: |
-          set +e
+          set -e
+          mkdir -p _project
           for z in ./*.zip; do
             if [ -f "$z" ]; then echo "Unzipping $z"; unzip -q -o "$z" -d _project; fi
           done
-          Y=$(find . -name project.yml -path "*/ios/*" -not -path "./.git/*" | head -1)
+          if [ -d "./ios/overlay" ]; then
+            mkdir -p _project/ios
+            cp -R ./ios/overlay/. _project/ios/
+          fi
+          Y=$(find _project -name project.yml -path "*/ios/*" | head -1)
           if [ -z "$Y" ]; then echo "::error::ios/project.yml not found"; exit 1; fi
           echo "IOS_DIR=$(cd "$(dirname "$Y")" && pwd)" >> "$GITHUB_ENV"
           echo "Found: $Y"
@@ -31,24 +36,6 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
-
-      - name: Stockfish networks (the engine inside the app needs them)
-        shell: bash
-        run: |
-          set -e
-          RES="$IOS_DIR/ChessHelper/Resources"
-          mkdir -p "$RES"
-          for n in nn-1111cefa1111 nn-37f18f62d772; do
-            ok=0
-            for i in 1 2 3 4; do
-              curl -L --fail --retry 3 -o "$RES/$n.nnue" "https://tests.stockfishchess.org/api/nn/$n.nnue" || true
-              sum=$(shasum -a 256 "$RES/$n.nnue" | cut -c1-12)
-              if [ "$sum" = "${n#nn-}" ]; then ok=1; break; fi
-              echo "Network $n not complete (got $sum), retrying ($i)"; sleep 10
-            done
-            [ "$ok" = 1 ] || { echo "::error::could not download $n"; exit 1; }
-          done
-          ls -la "$RES"
 
       - name: Install XcodeGen and make the Xcode project
         shell: bash
@@ -64,7 +51,7 @@ jobs:
         run: |
           set -o pipefail
           cd "$IOS_DIR"
-          xcodebuild -project ChessHelper.xcodeproj -scheme ChessHelper -configuration Release \
+          SWIFTSTOCKFISH_FORCE_SOURCE_ENGINE=1 xcodebuild -project ChessHelper.xcodeproj -scheme ChessHelper -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: unable|BUILD |Compiling|Linking" | tail -n 60 || true
@@ -82,7 +69,6 @@ jobs:
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
           echo "App: $APP"
           ls -la "$APP" | head -30
-          test -f "$APP/nn-1111cefa1111.nnue" || { echo "::error::the network file is not inside the app"; exit 1; }
           rm -rf Payload ChessHelper-iOS.ipa
           mkdir Payload
           cp -R "$APP" Payload/
@@ -104,6 +90,6 @@ jobs:
           name: Chess Helper iOS (.ipa) #${{ github.run_number }}
           files: ChessHelper-iOS.ipa
           body: |
-            Chess Helper for iPhone/iPad (unsigned .ipa, Stockfish 17 inside).
+            Chess Helper for iPhone/iPad (unsigned .ipa, real Stockfish 19 engine). The required NNUE network is downloaded and SHA-256 verified on first launch; internet is needed for initial setup.
             It is NOT signed: install it with Sideloadly, AltStore or TrollStore (see ios/README.md in the project).
             iOS does not allow a floating window over other apps, so this is a normal app with its own board.
