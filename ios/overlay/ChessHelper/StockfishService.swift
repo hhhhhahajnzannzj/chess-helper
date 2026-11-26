@@ -18,14 +18,22 @@ final class StockfishService: @unchecked Sendable {
     private var continuation: CheckedContinuation<[EngineLine], Never>?
     private var readyContinuation: CheckedContinuation<Bool, Never>?
     private var searching = false
-    private(set) var ready = false
+    private var ready = false
+
+    deinit {
+        listener?.cancel()
+        engine?.shutdown()
+    }
 
     // MARK: start
 
     /// Downloads and verifies Stockfish 19's official NNUE network on first launch,
     /// then starts the native engine. The network is cached in Application Support.
     func start() async -> Bool {
-        if ready { return true }
+        lock.lock()
+        let alreadyReady = ready
+        lock.unlock()
+        if alreadyReady { return true }
 
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory,
