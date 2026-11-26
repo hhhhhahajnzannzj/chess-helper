@@ -297,16 +297,18 @@ jobs:
           tag_name: apk-${{ github.run_number }}
           name: Chess Helper APK ${{ github.run_number }}
           body: |
-            Two files, pick the one for your phone:
+            Pick the file for your phone:
             - **ChessHelper-arm64.apk** - phones with a 64-bit processor (almost every phone made since 2017). Choose this one if unsure.
             - **ChessHelper-arm32.apk** - older or low-end phones, or phones running 32-bit Android.
-            - **ChessHelper-arm64-allengines.apk** - optional, 64-bit phones only, very large: also has Triumviratus, PlentyChess and ShashChess for the Engine Agent (only the ones that could be built; needs a lot of free space and memory).
+            - **ChessHelper-arm64-allengines.apk** - optional, 64-bit phones only, very large: SuperChess with all its companion engines (Reckless plus Triumviratus, PlentyChess and ShashChess, only the ones that could be built). Needs a lot of free space and memory.
 
             For Windows PCs (64-bit):
             - **ChessHelper-Windows-portable.zip** - unzip it and run ChessHelper.exe (nothing to install, Java is inside).
             - **ChessHelper-Setup.exe** - the same app as a normal installer (only there when the installer could be built).
 
-            There is no iPhone/iPad version: iOS does not allow a floating helper window or running a chess engine like this.
+            Every app uses SuperChess: the official, unmodified Stockfish 19 plus companion engines. It is a practice helper, not a promise of a win. Using an engine against people is cheating.
+
+            There is no iPhone/iPad download here: iOS does not allow a floating helper window.
 
             If Android says the app cannot be installed because of the processor type, take the other file.
             If it says the app conflicts with an existing one, uninstall the old Chess Helper first.

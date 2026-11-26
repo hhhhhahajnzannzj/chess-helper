@@ -97,13 +97,9 @@ jobs:
           name: ios-build-log
           path: ${{ env.IOS_DIR }}/build.log
 
-      - name: Publish the .ipa in Releases
-        uses: softprops/action-gh-release@v2
+      - name: Keep the .ipa as a build file (it is not published in Releases)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ios-${{ github.run_number }}
-          name: Chess Helper iOS (.ipa) #${{ github.run_number }}
-          files: ChessHelper-iOS.ipa
-          body: |
-            Chess Helper for iPhone/iPad (unsigned .ipa, real Stockfish 19 engine). The required NNUE network is downloaded and SHA-256 verified on first launch; internet is needed for initial setup.
-            It is NOT signed: install it with Sideloadly, AltStore or TrollStore (see ios/README.md in the project).
-            iOS does not allow a free floating window over other apps. This app has a floating Picture in Picture board instead: it shows the board and the blue move on top of other apps (view only; tap the moves in the app).
+          name: ChessHelper-iOS-ipa
+          path: ChessHelper-iOS.ipa
+          retention-days: 14
