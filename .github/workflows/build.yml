@@ -284,11 +284,24 @@ jobs:
           if ls "$GITHUB_WORKSPACE"/extra-engines-out/* > /dev/null 2>&1; then
             mkdir -p app/src/main/jniLibs/arm64-v8a
             cp "$GITHUB_WORKSPACE"/extra-engines-out/* app/src/main/jniLibs/arm64-v8a/
+            # the lighter one first: everything except Triumviratus (its network alone is ~250 MB)
+            rm -f app/src/main/jniLibs/arm64-v8a/*triumviratus*
+            ./gradlew assembleDebug --no-daemon --stacktrace -PabiTarget=arm64-v8a
+            cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/ChessHelper-arm64-allengines-lite.apk"
+            # then the full one
+            cp "$GITHUB_WORKSPACE"/extra-engines-out/* app/src/main/jniLibs/arm64-v8a/
             ./gradlew assembleDebug --no-daemon --stacktrace -PabiTarget=arm64-v8a
             cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/ChessHelper-arm64-allengines.apk"
-            ls -la "$GITHUB_WORKSPACE"/ChessHelper-arm64-allengines.apk
-            echo "---- allengines APK"; unzip -l "$GITHUB_WORKSPACE/ChessHelper-arm64-allengines.apk" | grep -E "lib/" || true
+            ls -la "$GITHUB_WORKSPACE"/ChessHelper-arm64-allengines*.apk
+            for f in "$GITHUB_WORKSPACE"/ChessHelper-arm64-allengines*.apk; do echo "---- $f"; unzip -l "$f" | grep -E "lib/" || true; done
           fi
+          # a structural check of every APK with the Android SDK's own tools (printed, never fatal)
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1)
+          for f in "$GITHUB_WORKSPACE"/ChessHelper-*.apk; do
+            echo "==== $(basename "$f")  ($(du -h "$f" | cut -f1))"
+            "$BT/apksigner" verify --verbose "$f" 2>&1 | head -8 || true
+            "$BT/aapt2" dump badging "$f" 2>&1 | grep -E "^package|sdkVersion|native-code" | head -4 || true
+          done
           true
 
       - name: Publish the APKs to Releases (easy download on your phone)
@@ -300,7 +313,8 @@ jobs:
             Pick the file for your phone:
             - **ChessHelper-arm64.apk** - phones with a 64-bit processor (almost every phone made since 2017). Choose this one if unsure.
             - **ChessHelper-arm32.apk** - older or low-end phones, or phones running 32-bit Android.
-            - **ChessHelper-arm64-allengines.apk** - optional, 64-bit phones only, very large: SuperChess with all its companion engines (Reckless plus Triumviratus, PlentyChess and ShashChess, only the ones that could be built). Needs a lot of free space and memory.
+            - **ChessHelper-arm64-allengines-lite.apk** - optional, 64-bit phones only, large (about 350 MB): SuperChess with the companion engines Reckless, PlentyChess and ShashChess (only the ones that could be built). Try this one first if you want more engines.
+            - **ChessHelper-arm64-allengines.apk** - optional, 64-bit phones only, HUGE (about 550 MB): the same plus Triumviratus. Some phones refuse to install such a big file ("package appears to be invalid"). If yours does, use the lite one.
 
             For Windows PCs (64-bit):
             - **ChessHelper-Windows-portable.zip** - unzip it and run ChessHelper.exe (nothing to install, Java is inside).
@@ -315,6 +329,7 @@ jobs:
           files: |
             ChessHelper-arm64.apk
             ChessHelper-arm32.apk
+            ChessHelper-arm64-allengines-lite.apk
             ChessHelper-arm64-allengines.apk
 
   windows:
